@@ -51,6 +51,7 @@ enum link_status {
 
 #define ACSPCIE_PAD_DISABLE_MASK	GENMASK(1, 0)
 #define GENERATION_SEL_MASK		GENMASK(1, 0)
+#define PCIE_REFCLK_CLKSEL_MASK		(BIT(8) | GENMASK(1, 0))
 
 struct j721e_pcie {
 	struct cdns_pcie	*cdns_pcie;
@@ -255,6 +256,55 @@ static int j721e_enable_acspcie_refclk(struct j721e_pcie *pcie,
 	return 0;
 }
 
+/*
+ * Configure PCIE_REFCLK CLKSEL registers for refclk output on
+ * PCIE_REFCLK1_P/N_OUT package pins.
+ *
+ * Errata i2308 (J721S2): die PCIE_REFCLK3 pads are mis-wired to the
+ * PCIE_REFCLK1_P/N_OUT package pins instead of die PCIE_REFCLK1 pads.
+ * Workaround: set PCIE_REFCLK3_CLKSEL. For future-proofing against the
+ * rolling package fix, set both PCIE_REFCLK1_CLKSEL and PCIE_REFCLK3_CLKSEL
+ * by providing multiple phandle entries in ti,syscon-pcie-refclk-clksel.
+ */
+static int j721e_enable_pcie_refclk_clksel(struct j721e_pcie *pcie,
+					   struct device *dev)
+{
+	struct device_node *node = dev->of_node;
+	struct of_phandle_args args;
+	struct regmap *syscon;
+	u32 clksel, val;
+	int ret, i;
+
+	for (i = 0; ; i++) {
+		ret = of_parse_phandle_with_fixed_args(node,
+					"ti,syscon-pcie-refclk-clksel",
+					1, i, &args);
+		if (ret)
+			break;
+
+		syscon = syscon_node_to_regmap(args.np);
+		of_node_put(args.np);
+		if (IS_ERR(syscon)) {
+			dev_err(dev,
+				"failed to get refclk-clksel regmap[%d]: %ld\n",
+				i, PTR_ERR(syscon));
+			return PTR_ERR(syscon);
+		}
+
+		clksel = args.args[0] & GENERATION_SEL_MASK;
+		val = BIT(8) | clksel;
+		ret = regmap_update_bits(syscon, 0, PCIE_REFCLK_CLKSEL_MASK, val);
+		if (ret) {
+			dev_err(dev,
+				"failed to configure refclk-clksel[%d]: %d\n",
+				i, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int j721e_pcie_ctrl_init(struct j721e_pcie *pcie, struct device *dev)
 {
 	struct device_node *node = dev->of_node;
@@ -296,10 +346,13 @@ static int j721e_pcie_ctrl_init(struct j721e_pcie *pcie, struct device *dev)
 	/* Enable ACSPCIE refclk output if the optional property exists */
 	syscon = syscon_regmap_lookup_by_phandle_optional(node,
 						"ti,syscon-acspcie-proxy-ctrl");
-	if (!syscon)
-		return 0;
+	if (syscon) {
+		ret = j721e_enable_acspcie_refclk(pcie, dev, syscon);
+		if (ret)
+			return ret;
+	}
 
-	return j721e_enable_acspcie_refclk(pcie, dev, syscon);
+	return j721e_enable_pcie_refclk_clksel(pcie, dev);
 }
 
 static int cdns_ti_pcie_config_read(struct pci_bus *bus, unsigned int devfn,

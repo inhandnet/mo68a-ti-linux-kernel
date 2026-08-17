@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: GPL-2.0
+/**
+ * Mo 68A SerDes overlay: disable eDP for PCIe.
+ *
+ * Switches SerDes from default (eDP + USB 3.0 SS) to (USB SS + PCIe).
+ * USB SS stays enabled; eDP/DP output (J9 Mini DisplayPort) is disabled.
+ * SerDes lanes 2/3 are released from eDP and marked unused.
+ *
+ * DSI display path (J24 + DSI overlay) is unaffected — DSI uses its own
+ * dphy_tx0 (MIPI D-PHY), not SerDes. Keep &dss enabled so DSI still works.
+ *
+ * The critical fix vs an earlier attempt:
+ *   &torrent_phy_dp (the SoC-level DP PHY child of serdes0, defined in
+ *   k3-j721s2-main.dtsi) must be disabled. Otherwise the Cadence Torrent
+ *   driver counts PCIe + USB3 + DP = 3 protocols and refuses to probe
+ *   ("at most 2 protocols are supported").
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/mux/ti-serdes.h>
+
+&serdes_ln_ctrl {
+	idle-states = <J721S2_SERDES0_LANE0_PCIE1_LANE0>, <J721S2_SERDES0_LANE1_USB>,
+		      <J721S2_SERDES0_LANE2_IP3_UNUSED>, <J721S2_SERDES0_LANE3_IP4_UNUSED>;
+};
+
+/* Free the DP protocol slot — this is the actual fix for the
+ * "at most 2 protocols are supported" probe failure. */
+&torrent_phy_dp {
+	status = "disabled";
+};
+
+&serdes0_pcie_link {
+	status = "okay";
+};
+
+&pcie1_rc {
+	status = "okay";
+};
+
+&mhdp {
+	status = "disabled";
+};

@@ -1,0 +1,113 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Mo 68A overlay: switch 40-pin peripheral pads (I2C0 / UART5 / SPI5 /
+ * MCASP0 / ECAP0 defaults) to GPIO alt (MUX_MODE7) so the 40-pin header
+ * behaves like a Raspberry Pi HAT-style GPIO header out of the box.
+ *
+ * Peripherals disabled by this overlay (they occupy 40-pin pads;
+ *   naming matches the UG "40-pin GPIO header" pin table):
+ *   main_i2c0      → pin 3 / 5        (I2C0 SDA / SCL)
+ *   main_uart5     → pin 8 / 10       (UART5 TXD / RXD)
+ *   mcasp0         → pin 12 / 35 / 38 / 40   (I2S CLK / FS / DIN / DOUT)
+ *   main_spi5      → pin 19 / 21 / 23 / 24 / 26   (SPI5 MOSI/MISO/CLK/CS0/CS1)
+ *   main_ecap0     → pin 32           (ECAP0)
+ *   main_ehrpwm5   → pin 33           (PWM5_B)
+ *   AUDIO_EXT_REFCLK1 output → pin 7  (AUDIO_CLK) — muxed to GPIO0_30
+ *                                       via the &audio_ext_refclk1_pins_default
+ *                                       group override (see below)
+ *
+ * Pads already default-GPIO (no pinmux rewrite needed): pin 13/16/18/29/31/36/37
+ * (main_gpio0 lines) and pin 11/15/22 (WKUP domain).
+ *
+ * Pin 27 = WKUP_I2C0_SDA, pin 28 = WKUP_I2C0_SCL — WKUP domain (shared
+ * with PMIC I2C).  Not touched by this overlay to avoid PMIC risk.
+ *
+ * Pinctrl-application mechanism: pinctrl-single (main_pmx0) is a state
+ * provider, not a consumer, so `pinctrl-0` attached to it doesn't
+ * auto-apply.  The K3 idiom (BeaglePlay, HummingBoard, AM62 boards) is
+ * to add a gpio-leds/gpio-keys dummy consumer whose driver probes at
+ * boot, applies its pinctrl-0 state, and holds one anchor GPIO line.
+ *
+ * Anchor: main_gpio0 line 42 (pad U24, MCASP0_AXR14 by default) — not
+ * on the 40-pin header, not referenced by any other Mo68A device.
+ * Included in the pin group so its pinmux becomes mode 7 = GPIO0_42.
+ * The anchor LED shows up as /sys/class/leds/mo68a-40pin-anchor with
+ * no physical LED — harmless side effect.
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include "k3-pinctrl.h"
+
+&main_i2c0     { status = "disabled"; };
+&main_uart5    { status = "disabled"; };
+&main_spi5     { status = "disabled"; };
+&mcasp0        { status = "disabled"; };
+&main_ehrpwm5  { status = "disabled"; };  /* pin 33 (U26) */
+&main_ecap0    { status = "disabled"; };  /* pin 32 (AB26) */
+
+/*
+ * Base Mo68A DTS assigns k3_clks a pinctrl-0 that muxes pad Y25 (offset
+ * 0x078) to AUDIO_EXT_REFCLK1 output (mode 1) via the
+ * `audio_ext_refclk1_pins_default` group.  This blocks pinctrl-single
+ * from reclaiming pin 30 for GPIO mode, and `/delete-property/` on
+ * `&k3_clks` inside an overlay is silently dropped by dtc — the delete
+ * directive doesn't reach the FDT overlay applier.
+ *
+ * Fix: override the base group in-place so k3_clks still successfully
+ * applies its default pinctrl state, but the pad is muxed to mode 7
+ * (GPIO0_30) instead of mode 1.  Result: pin 30 is claimed by k3_clks
+ * in GPIO mode, our anchor group leaves it alone (no double-claim
+ * conflict), and Y25 behaves as GPIO0_30 like the other 40-pin pads.
+ *
+ * Mo 68A has no external audio device consuming AUDIO_EXT_REFCLK1
+ * (WM8960 HAT uses internal AUXCLK), so muxing this pad away is safe.
+ */
+&audio_ext_refclk1_pins_default {
+	pinctrl-single,pins = <
+		J721S2_IOPAD(0x078, PIN_INPUT, 7)  /* (Y25) AUDIO_CLK → GPIO0_30 pin 7 */
+	>;
+};
+
+&main_pmx0 {
+	mo68a_40pin_gpio_pins_default: mo68a-40pin-gpio-default-pins {
+		pinctrl-single,pins = <
+			J721S2_IOPAD(0x004, PIN_INPUT, 7)  /* (W25)  UART5_TXD  → GPIO0_1   pin 8  */
+			J721S2_IOPAD(0x008, PIN_INPUT, 7)  /* (AC24) UART5_RXD  → GPIO0_2   pin 10 */
+			J721S2_IOPAD(0x038, PIN_INPUT, 7)  /* (AB28) I2S_CLK    → GPIO0_14  pin 12 */
+			J721S2_IOPAD(0x03c, PIN_INPUT, 7)  /* (U27)  I2S_FS     → GPIO0_15  pin 35 */
+			J721S2_IOPAD(0x040, PIN_INPUT, 7)  /* (AC28) I2S_DIN    → GPIO0_16  pin 38 */
+			J721S2_IOPAD(0x044, PIN_INPUT, 7)  /* (Y26)  I2S_DOUT   → GPIO0_17  pin 40 */
+			J721S2_IOPAD(0x064, PIN_INPUT, 7)  /* (W28)  SPI5_CS1   → GPIO0_25  pin 26 */
+			J721S2_IOPAD(0x068, PIN_INPUT, 7)  /* (U28)  SPI5_CS0   → GPIO0_26  pin 24 */
+			J721S2_IOPAD(0x070, PIN_INPUT, 7)  /* (R27)  SPI5_MOSI  → GPIO0_28  pin 19 */
+			/* pin 7 (0x078, Y25) is muxed by the &audio_ext_refclk1_pins_default
+			 * override above — leaving it out here avoids a double-claim conflict
+			 * with the k3_clks driver, which owns that group. */
+			J721S2_IOPAD(0x07c, PIN_INPUT, 7)  /* (T27)  SPI5_CLK   → GPIO0_31  pin 23 */
+			J721S2_IOPAD(0x080, PIN_INPUT, 7)  /* (U26)  PWM5_B     → GPIO0_32  pin 33 */
+			J721S2_IOPAD(0x088, PIN_INPUT, 7)  /* (AD27) SPI5_MISO  → GPIO0_34  pin 21 */
+			J721S2_IOPAD(0x0a8, PIN_INPUT, 7)  /* (U24)  MCASP0_AXR14 → GPIO0_42 (anchor) */
+			J721S2_IOPAD(0x0c4, PIN_INPUT, 7)  /* (AB26) ECAP0      → GPIO0_49  pin 32 */
+			J721S2_IOPAD(0x0e0, PIN_INPUT, 7)  /* (AH25) I2C0_SCL   → GPIO0_56  pin 5  */
+			J721S2_IOPAD(0x0e4, PIN_INPUT, 7)  /* (AE24) I2C0_SDA   → GPIO0_57  pin 3  */
+		>;
+	};
+};
+
+&{/} {
+	mo68a_40pin_pinctrl_anchor: mo68a-40pin-pinctrl-anchor {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&mo68a_40pin_gpio_pins_default>;
+
+		anchor-led {
+			label = "mo68a-40pin-anchor";
+			gpios = <&main_gpio0 42 0>;  /* GPIO_ACTIVE_HIGH */
+			default-state = "off";
+		};
+	};
+};

@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * DT Overlay for Sony IMX219 (RPi Camera V2.1) on Panda AI 1 MAX
+ * Camera on J25 FPC (MIPI1 → CSI1)
+ *
+ * Signal routing:
+ *   J25 FPC → TMUX6462ECR U16 (mipi1_mux, SEL=HIGH=CSI1) → DPHY1 → cdns_csi2rx1 → ti_csi2rx1
+ *   I2C: main_i2c5 (Y24=SCL, W23=SDA)
+ *   CSI_PWDN1: GPIO0_48 (T28), active-high XSHUTDOWN for J25 camera
+ *     (hogged HIGH in base DTS — do NOT use reset-gpios here)
+ *
+ * Use this overlay instead of k3-j721s2-mo68a-csi2-imx219-mipi0.dtbo (J24→CSI0).
+ * Both J24 and J25 share main_i2c5; only one IMX219 can be active at a time.
+ *
+ * After loading this overlay, capture device is under 4510000.ticsi2rx (not 4500000).
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+
+/*
+ * Switch MIPI1 mux (U16 TMUX6462ECR) to CSI1 mode for IMX219 camera on J25 FPC.
+ * SEL=HIGH (state=1) → CSI1 path, SEL=LOW (state=0) → DSI1 path.
+ */
+&mipi1_mux {
+	idle-state = <1>;
+};
+
+/*
+ * IMX219 camera on J25 FPC, I2C5 (Y24/W23), address 0x10.
+ * Clock: 24 MHz fixed clock (clk_imx219_fixed defined in base board DTS).
+ */
+&main_i2c5 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	imx219_0: imx219-0@10 {
+		compatible = "sony,imx219";
+		reg = <0x10>;
+
+		clocks = <&clk_imx219_fixed>;
+
+		port {
+			csi2_cam0: endpoint {
+				remote-endpoint = <&csi2rx1_in_sensor>;
+				link-frequencies = /bits/ 64 <456000000>;
+				clock-lanes = <0>;
+				data-lanes = <1 2>;
+			};
+		};
+	};
+};
+
+/* DPHY1: D-PHY receiver for CSI1 */
+&dphy1 {
+	status = "okay";
+};
+
+/* ti_csi2rx1: TI CSI2 RX shim + DMA for CSI1 */
+&ti_csi2rx1 {
+	status = "okay";
+};
+
+/* cdns_csi2rx1: Cadence CSI2 RX bridge for CSI1, port@0 → IMX219 */
+&cdns_csi2rx1 {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		csi1_port0: port@0 {
+			reg = <0>;
+			status = "okay";
+
+			csi2rx1_in_sensor: endpoint {
+				remote-endpoint = <&csi2_cam0>;
+				bus-type = <4>; /* CSI2 DPHY */
+				clock-lanes = <0>;
+				data-lanes = <1 2>;
+			};
+		};
+
+		csi1_port1: port@1 { reg = <1>; status = "disabled"; };
+		csi1_port2: port@2 { reg = <2>; status = "disabled"; };
+		csi1_port3: port@3 { reg = <3>; status = "disabled"; };
+		csi1_port4: port@4 { reg = <4>; status = "disabled"; };
+	};
+};

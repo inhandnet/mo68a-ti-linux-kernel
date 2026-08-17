@@ -407,6 +407,7 @@ struct cdns_torrent_derived_refclk {
 	struct regmap_field	*phy_pipe_cmn_ctrl1_0;
 	struct regmap_field	*cmn_cdiag_refclk_ovrd_4;
 	struct clk_init_data	clk_data;
+	struct cdns_torrent_phy	*cdns_phy; /* wucl: for PCIE+DP multilink REFCLK fix */
 };
 
 #define to_cdns_torrent_derived_refclk(_hw)	\
@@ -417,6 +418,7 @@ struct cdns_torrent_received_refclk {
 	struct regmap_field	*phy_pipe_cmn_ctrl1_0;
 	struct regmap_field	*cmn_cdiag_refclk_ovrd_4;
 	struct clk_init_data	clk_data;
+	struct cdns_torrent_phy	*cdns_phy; /* wucl: for PCIE+DP multilink REFCLK fix */
 };
 
 #define to_cdns_torrent_received_refclk(_hw)	\
@@ -1644,6 +1646,35 @@ static int cdns_torrent_phy_on(struct phy *phy)
 	int ret;
 
 	if (cdns_phy->already_configured) {
+		if (inst->phy_type == TYPE_PCIE) {
+			/*
+			 * wucl: In the multilink firmware-preconfigured case
+			 * (PCIe + USB3 + eDP sharing SERDES0), firmware sets
+			 * PHY_PIPE_CMN_CTRL1=0x0400 (bit10=1, bit0=0).
+			 * Bit0 enables the PIPE common clock to the PCIe MAC.
+			 * Userspace writes fail (SMMU-blocked); must use regmap.
+			 */
+			regmap_field_write(cdns_phy->phy_pipe_cmn_ctrl1_0, 1);
+
+			/*
+			 * wucl: Firmware also leaves PHY_PCS_ISO_LINK_CTRL[1]=1
+			 * for the PCIe lane (lane isolated, PIPE data blocked).
+			 * PHY_PCS_ISO_LINK_CTRL = 0x23 at boot. Write 0 to clear
+			 * the isolation bits so the PIPE interface becomes active.
+			 */
+			regmap_write(cdns_phy->regmap_phy_pcs_lane_cdb[inst->mlane],
+				     PHY_PCS_ISO_LINK_CTRL, 0);
+
+			/* Wait for de-isolation to complete */
+			ret = regmap_field_read_poll_timeout(
+				cdns_phy->phy_pcs_iso_link_ctrl_1[inst->mlane],
+				read_val, !read_val, 1000, PLL_LOCK_TIMEOUT);
+			if (ret == -ETIMEDOUT) {
+				dev_err(cdns_phy->dev,
+					"already_configured: timeout waiting for PCIe PIPE de-isolation\n");
+				return ret;
+			}
+		}
 		/* Give 5ms to 10ms delay for the PIPE clock to be stable */
 		usleep_range(5000, 10000);
 		return 0;
@@ -1819,7 +1850,16 @@ static int cdns_torrent_derived_refclk_enable(struct clk_hw *hw)
 	struct cdns_torrent_derived_refclk *derived_refclk = to_cdns_torrent_derived_refclk(hw);
 
 	regmap_field_write(derived_refclk->cmn_cdiag_refclk_ovrd_4, 1);
-	regmap_field_write(derived_refclk->phy_pipe_cmn_ctrl1_0, 1);
+	/*
+	 * wucl: When already_configured=1, firmware pre-configured the SERDES
+	 * for multilink (PCIe + USB3 + eDP sharing SERDES0). Setting
+	 * PHY_PIPE_CMN_CTRL1[0]=1 would switch the entire common block to
+	 * PIPE mode and break USB3 (lane1) and eDP (lanes2/3). Skip it.
+	 * When already_configured=0, Linux manages SERDES init so the write
+	 * is needed and safe.
+	 */
+	if (!derived_refclk->cdns_phy->already_configured)
+		regmap_field_write(derived_refclk->phy_pipe_cmn_ctrl1_0, 1);
 
 	return 0;
 }
@@ -1828,7 +1868,9 @@ static void cdns_torrent_derived_refclk_disable(struct clk_hw *hw)
 {
 	struct cdns_torrent_derived_refclk *derived_refclk = to_cdns_torrent_derived_refclk(hw);
 
-	regmap_field_write(derived_refclk->phy_pipe_cmn_ctrl1_0, 0);
+	/* wucl: only clear if we set it (not set when already_configured=1) */
+	if (!derived_refclk->cdns_phy->already_configured)
+		regmap_field_write(derived_refclk->phy_pipe_cmn_ctrl1_0, 0);
 	regmap_field_write(derived_refclk->cmn_cdiag_refclk_ovrd_4, 0);
 }
 
@@ -1885,6 +1927,7 @@ static int cdns_torrent_derived_refclk_register(struct cdns_torrent_phy *cdns_ph
 
 	derived_refclk->phy_pipe_cmn_ctrl1_0 = cdns_phy->phy_pipe_cmn_ctrl1_0;
 	derived_refclk->cmn_cdiag_refclk_ovrd_4 = cdns_phy->cmn_cdiag_refclk_ovrd_4;
+	derived_refclk->cdns_phy = cdns_phy; /* wucl: for PCIE+DP multilink REFCLK fix */
 
 	derived_refclk->hw.init = init;
 
@@ -1902,7 +1945,9 @@ static int cdns_torrent_received_refclk_enable(struct clk_hw *hw)
 {
 	struct cdns_torrent_received_refclk *received_refclk = to_cdns_torrent_received_refclk(hw);
 
-	regmap_field_write(received_refclk->phy_pipe_cmn_ctrl1_0, 1);
+	/* wucl: skip PIPE mode when already_configured (firmware multilink) */
+	if (!received_refclk->cdns_phy->already_configured)
+		regmap_field_write(received_refclk->phy_pipe_cmn_ctrl1_0, 1);
 
 	return 0;
 }
@@ -1911,7 +1956,9 @@ static void cdns_torrent_received_refclk_disable(struct clk_hw *hw)
 {
 	struct cdns_torrent_received_refclk *received_refclk = to_cdns_torrent_received_refclk(hw);
 
-	regmap_field_write(received_refclk->phy_pipe_cmn_ctrl1_0, 0);
+	/* wucl: only clear if we set it */
+	if (!received_refclk->cdns_phy->already_configured)
+		regmap_field_write(received_refclk->phy_pipe_cmn_ctrl1_0, 0);
 }
 
 static int cdns_torrent_received_refclk_is_enabled(struct clk_hw *hw)
@@ -1968,6 +2015,7 @@ static int cdns_torrent_received_refclk_register(struct cdns_torrent_phy *cdns_p
 
 	received_refclk->phy_pipe_cmn_ctrl1_0 = cdns_phy->phy_pipe_cmn_ctrl1_0;
 	received_refclk->cmn_cdiag_refclk_ovrd_4 = cdns_phy->cmn_cdiag_refclk_ovrd_4;
+	received_refclk->cdns_phy = cdns_phy; /* wucl: for PCIE+DP multilink REFCLK fix */
 
 	received_refclk->hw.init = init;
 

@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * DT Overlay for WM8960 Audio HAT on Panda AI 1 MAX
+ * MCASP0 (I2S master) + WM8960 codec (I2C slave) via 40-pin header
+ *
+ * Signal routing:
+ *   MCASP0 → 40-pin header: pin 12 (BCLK), pin 35 (LRCLK),
+ *                            pin 38 (DIN from WM8960), pin 40 (DOUT to WM8960)
+ *   I2C: main_i2c0, address 0x1a
+ *
+ * Clock: Internal AUXCLK (fck = 196.608 MHz), two-stage division:
+ *   AHCLKXDIV (÷4) → 49.152 MHz → ACLKXDIV → BCLK
+ *   48 kHz family: exact. 44.1 kHz: ~4860 PPM off-rate (expected).
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&{/} {
+	sound_wm8960: sound-wm8960 {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "WM8960-Audio";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,bitclock-master = <&wm8960_cpu>;
+		simple-audio-card,frame-master = <&wm8960_cpu>;
+
+		wm8960_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcasp0>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&wm8960>;
+		};
+	};
+};
+
+&main_i2c0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	wm8960: audio-codec@1a {
+		compatible = "wlf,wm8960";
+		reg = <0x1a>;
+		#sound-dai-cells = <0>;
+		AVDD-supply = <&vsys_3v3>;
+		DVDD-supply = <&vsys_3v3>;
+	};
+};
+
+&mcasp0 {
+	status = "okay";
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcasp0_pins_default>;
+	op-mode = <0>;          /* MCASP_IIS_MODE */
+	tdm-slots = <2>;
+	auxclk-fs-ratio = <256>;
+	serial-dir = <          /* 0: INACTIVE, 1: TX, 2: RX */
+		2 1 0 0             /* AXR0=RX(DIN/pin38), AXR1=TX(DOUT/pin40) */
+		0 0 0 0
+		0 0 0 0
+		0 0 0 0
+	>;
+};

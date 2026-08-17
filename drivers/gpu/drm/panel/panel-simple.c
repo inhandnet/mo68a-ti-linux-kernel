@@ -3857,16 +3857,19 @@ static const struct panel_desc rocktech_rk043fn48h = {
 };
 
 static const struct drm_display_mode raspberrypi_7inch_mode = {
+	/* wucl: hfp=80 hbp=48 (swapped vs upstream): required for ICN6211-based 
+	 * 7" clones on J721S2 cdns_dsi; other ratios cause right-edge ghost
+	 * or DSI bring-up failure.
+	 */
 	.clock = 28569600 / 1000,
 	.hdisplay = 800,
-	.hsync_start = 800 + 48,
-	.hsync_end = 800 + 48 + 32,
-	.htotal = 800 + 48 + 32 + 80,
+	.hsync_start = 800 + 80,
+	.hsync_end = 800 + 80 + 32,
+	.htotal = 800 + 80 + 32 + 48,
 	.vdisplay = 480,
 	.vsync_start = 480 + 3,
 	.vsync_end = 480 + 3 + 7,
 	.vtotal = 480 + 3 + 7 + 6,
-
 	.flags = DRM_MODE_FLAG_NVSYNC | DRM_MODE_FLAG_NHSYNC,
 };
 

@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * vision-apps: device-tree overlay
+ *
+ * Copyright (C) 2019 - 2021 Texas Instruments Incorporated - http://www.ti.com/
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include "k3-j721s2-rtos-memory-map.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] panda 接 EEPROM @0x50 (base dts okay)，不能 disable */
+&main_i2c1 {
+    status = "disabled";
+};
+#endif
+
+&main_i2c4 {
+	status = "disabled";
+};
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] panda 接 IMX219 camera + DSI panel I2C
+         * (base dts okay + 3 个 panda overlay 引用)，不能 disable */
+&main_i2c5 {
+	status = "disabled";
+};
+#endif
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] eDP 走 SerDes lane 2/3，必须放开 wrapper */
+&serdes_wiz0 {
+    status = "disabled";
+};
+#endif
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] mcu2_0 firmware 已重编 (#undef
+         * ENABLE_DSS_SINGLE) 不再在 DSS init 阶段 CRASH (DP_PWR DataAbort)，
+         * DSS 现在可以给 Linux 做桌面输出。 */
+&dss {
+    status = "disabled";
+};
+#endif
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] eDP/DP 桥本体，eDP 输出必须 enable */
+&mhdp {
+    status = "disabled";
+};
+#endif
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] panda MIPI0 接 IMX219 camera
+         * (panda-csi2-imx219-mipi0.dtbo)，不能 disable */
+&ti_csi2rx0 {
+    status = "disabled";
+};
+#endif
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] panda MIPI1 接 IMX219 camera
+         * (panda-csi2-imx219-mipi1.dtbo)，不能 disable */
+&ti_csi2rx1 {
+    status = "disabled";
+};
+#endif
+
+#if 0   /* [Panda AI 1 MAX 2026-05-22] SerDes 三选二采用 TI 默认 A 配置
+         * (eDP + PCIe)，PCIe1 占 lane 0 必须 enable */
+//wucl debug
+&pcie1_rc {
+    status = "disabled";
+};
+#endif
+
+#if 0 //wucl debug
+&exp_som {
+	P5_hog {
+		gpio-hog;
+		gpios = <5 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "GPIO_eDP_ENABLE";
+	};
+};
+#endif
+
+/* [Panda AI 1 MAX] 重新启用 Main-domain remoteproc 节点（Vision Apps 专用）。
+ * 配合 k3-j721s2-rtos-memory-map.dtsi 提供的 31MB carveout 覆盖，
+ * 使内核能正确映射 Vision Apps 固件所需的内存区域。 */
+&main_r5fss0 { status = "okay"; };
+&main_r5fss1 { status = "okay"; };
+&c71_0 { status = "okay"; };
+&c71_1 { status = "okay"; };
+/* [Panda AI 1 MAX] 修改结束 */

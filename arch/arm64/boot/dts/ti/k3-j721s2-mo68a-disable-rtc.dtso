@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0
+/**
+ * Mo 68A RTC overlay: disable on-board RTC PCF85363ATL.
+ *
+ * Use this overlay on earlier hardware revisions where the on-board RTC
+ * is not accessible from Linux. Without the overlay, the RTC subsystem
+ * issues continuous rtc_read_time errors to dmesg.
+ *
+ * The base DTS enables the RTC by default; this overlay opts out.
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&main_i2c1 {
+	rtc@51 {
+		status = "disabled";
+	};
+};

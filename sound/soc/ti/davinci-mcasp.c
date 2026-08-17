@@ -617,6 +617,9 @@ static int __davinci_mcasp_set_clkdiv(struct davinci_mcasp *mcasp, int div_id,
 			       AHCLKXDIV(div - 1), AHCLKXDIV_MASK);
 		mcasp_mod_bits(mcasp, DAVINCI_MCASP_AHCLKRCTL_REG,
 			       AHCLKRDIV(div - 1), AHCLKRDIV_MASK);
+		/* Enable internal AUXCLK (fck) as HCLKX/HCLKR source */
+		mcasp_set_bits(mcasp, DAVINCI_MCASP_AHCLKXCTL_REG, AHCLKXE);
+		mcasp_set_bits(mcasp, DAVINCI_MCASP_AHCLKRCTL_REG, AHCLKRE);
 		break;
 
 	case MCASP_CLKDIV_BCLK:			/* BCLK divider */
@@ -1121,25 +1124,24 @@ static int davinci_mcasp_calc_clk_div(struct davinci_mcasp *mcasp,
 				      unsigned int sysclk_freq,
 				      unsigned int bclk_freq, bool set)
 {
-	u32 reg = mcasp_get_reg(mcasp, DAVINCI_MCASP_AHCLKXCTL_REG);
 	int div = sysclk_freq / bclk_freq;
 	int rem = sysclk_freq % bclk_freq;
 	int error_ppm;
 	int aux_div = 1;
 
 	if (div > (ACLKXDIV_MASK + 1)) {
-		if (reg & AHCLKXE) {
-			aux_div = div / (ACLKXDIV_MASK + 1);
-			if (div % (ACLKXDIV_MASK + 1))
-				aux_div++;
+		/*
+		 * Use two-stage division: AHCLKXDIV (aux_div) + ACLKXDIV (div).
+		 * Works for both external AHCLKX (AHCLKXE=1) and internal fck
+		 * (AHCLKXE=0) when fck is too fast for ACLKXDIV alone.
+		 */
+		aux_div = div / (ACLKXDIV_MASK + 1);
+		if (div % (ACLKXDIV_MASK + 1))
+			aux_div++;
 
-			sysclk_freq /= aux_div;
-			div = sysclk_freq / bclk_freq;
-			rem = sysclk_freq % bclk_freq;
-		} else if (set) {
-			dev_warn(mcasp->dev, "Too fast reference clock (%u)\n",
-				 sysclk_freq);
-		}
+		sysclk_freq /= aux_div;
+		div = sysclk_freq / bclk_freq;
+		rem = sysclk_freq % bclk_freq;
 	}
 
 	if (rem != 0) {
@@ -1159,7 +1161,7 @@ static int davinci_mcasp_calc_clk_div(struct davinci_mcasp *mcasp,
 				 error_ppm);
 
 		__davinci_mcasp_set_clkdiv(mcasp, MCASP_CLKDIV_BCLK, div, 0);
-		if (reg & AHCLKXE)
+		if (aux_div > 1)
 			__davinci_mcasp_set_clkdiv(mcasp, MCASP_CLKDIV_AUXCLK,
 						   aux_div, 0);
 	}
@@ -2416,6 +2418,24 @@ static int davinci_mcasp_probe(struct platform_device *pdev)
 		goto err;
 	}
 
+	/*
+	 * If no sysclk_freq set via set_sysclk, read actual fck rate and use
+	 * it as the internal AUXCLK (HCLKX) source frequency.  This enables
+	 * the two-stage BCLK divider (AHCLKXDIV + ACLKXDIV) needed on J721S2
+	 * where fck = 196.608 MHz exceeds ACLKXDIV alone (max ×32).
+	 */
+	if (!mcasp->sysclk_freq) {
+		struct clk *fck = clk_get(&pdev->dev, "fck");
+
+		if (!IS_ERR(fck)) {
+			unsigned long rate = clk_get_rate(fck);
+
+			clk_put(fck);
+			if (rate)
+				mcasp->sysclk_freq = (unsigned int)rate;
+		}
+	}
+
 	ret = davinci_mcasp_set_ch_constraints(mcasp);
 	if (ret)
 		goto err;
@@ -2521,6 +2541,18 @@ static int davinci_mcasp_runtime_resume(struct device *dev)
 	for (i = 0; i < mcasp->num_serializer; i++)
 		mcasp_set_reg(mcasp, DAVINCI_MCASP_XRSRCTL_REG(i),
 			      context->xrsr_regs[i]);
+
+	/*
+	 * On J721S2 no external AHCLKX/AHCLKR source is connected. When
+	 * sysclk_freq is set the McASP uses its internal AUXCLK (fck) as the
+	 * high-frequency clock source, requiring AHCLKXE/AHCLKRE = 1.
+	 * The context may have been saved with these bits clear (e.g. during
+	 * early probe), so force them after every resume.
+	 */
+	if (mcasp->sysclk_freq) {
+		mcasp_set_bits(mcasp, DAVINCI_MCASP_AHCLKXCTL_REG, AHCLKXE);
+		mcasp_set_bits(mcasp, DAVINCI_MCASP_AHCLKRCTL_REG, AHCLKRE);
+	}
 
 	return 0;
 }

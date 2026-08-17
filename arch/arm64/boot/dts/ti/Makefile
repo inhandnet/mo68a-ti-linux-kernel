@@ -192,6 +192,19 @@ k3-j721s2-evm-dtbs := k3-j721s2-common-proc-board.dtb k3-j721s2-evm-gesi-exp-boa
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-evm.dtb
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-evm-pcie1-ep.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-evm-ub954.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-vision-apps.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-csi2-imx219-mipi0.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-csi2-imx219-mipi1.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-wm8960-audio-hat.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-pmic-watchdog.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-disable-usbss-for-pcie.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-disable-edp-for-pcie.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-disable-rtc.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-rpi-hdr-gpio.dtbo
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-csi2-imx219-mipi0.dtb
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-csi2-imx219-mipi1.dtb
+dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0.dtb
 
 # Boards with J722s SoC
 dtb-$(CONFIG_ARCH_K3) += k3-am67a-beagley-ai.dtb
@@ -360,6 +373,14 @@ k3-j721e-sk-csi2-dual-imx219-dtbs := k3-j721e-sk.dtb \
 	k3-j721e-sk-csi2-dual-imx219.dtbo
 k3-j721s2-evm-pcie1-ep-dtbs := k3-j721s2-common-proc-board.dtb \
 	k3-j721s2-evm-pcie1-ep.dtbo
+k3-j721s2-mo68a-csi2-imx219-mipi0-dtbs := k3-j721s2-common-proc-board.dtb \
+	k3-j721s2-mo68a-csi2-imx219-mipi0.dtbo
+k3-j721s2-mo68a-csi2-imx219-mipi1-dtbs := k3-j721s2-common-proc-board.dtb \
+	k3-j721s2-mo68a-csi2-imx219-mipi1.dtbo
+k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0-dtbs := k3-j721s2-common-proc-board.dtb \
+	k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0.dtbo
+k3-j721s2-mo68a-wm8960-audio-hat-dtbs := k3-j721s2-common-proc-board.dtb \
+	k3-j721s2-mo68a-wm8960-audio-hat.dtbo
 k3-j721s2-evm-mcspi-loopback-dtbs := k3-j721s2-common-proc-board.dtb \
 	k3-j7200-evm-mcspi-loopback.dtbo
 k3-j722s-evm-fpdlink-fusion-dtbs := k3-j722s-evm.dtb \
@@ -459,6 +480,9 @@ dtb- += k3-am625-beagleplay-csi2-ov5640.dtb \
 	k3-j721e-evm-pcie1-ep.dtb \
 	k3-j721e-sk-csi2-dual-imx219.dtb \
 	k3-j721s2-evm-pcie1-ep.dtb \
+	k3-j721s2-mo68a-csi2-imx219-mipi0.dtb \
+	k3-j721s2-mo68a-csi2-imx219-mipi1.dtb \
+	k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0.dtb \
 	k3-j721s2-evm-mcspi-loopback.dtb \
 	k3-j722s-evm-fpdlink-fusion.dtb \
 	k3-j722s-evm-fpdlink-iv-fusion.dtb \
@@ -551,6 +575,9 @@ DTC_FLAGS_k3-j721e-evm-ub954 += -@
 DTC_FLAGS_k3-j721e-sk += -@
 DTC_FLAGS_k3-j721e-sk-fpdlink-fusion += -@
 DTC_FLAGS_k3-j721s2-common-proc-board += -@
+DTC_FLAGS_k3-j721s2-mo68a-csi2-imx219-mipi0 += -@
+DTC_FLAGS_k3-j721s2-mo68a-csi2-imx219-mipi1 += -@
+DTC_FLAGS_k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0 += -@
 DTC_FLAGS_k3-j721s2-evm-fusion += -@
 DTC_FLAGS_k3-j721s2-evm-ub954 += -@
 DTC_FLAGS_k3-j722s-evm += -@

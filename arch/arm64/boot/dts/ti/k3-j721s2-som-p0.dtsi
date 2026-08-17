@@ -142,6 +142,7 @@
 		};
 	};
 
+#if 0 //wucl debug
 	mux0: mux-controller-0 {
 		compatible = "gpio-mux";
 		#mux-state-cells = <1>;
@@ -160,6 +161,7 @@
 		#phy-cells = <0>;
 		max-bitrate = <5000000>;
 	};
+#endif
 
 	vsys_io_1v8: regulator-vsys-io-1v8 {
 		compatible = "regulator-fixed";
@@ -253,13 +255,16 @@
 	pinctrl-0 = <&wkup_i2c0_pins_default>;
 	clock-frequency = <400000>;
 
+#if 0 //wucl debug
 	eeprom@50 {
 		/* CAV24C256WE-GT3 */
 		compatible = "atmel,24c256";
 		reg = <0x50>;
 	};
+#endif
 
 	tps659411: pmic@48 {
+	        status = "okay"; //wucl debug
 		compatible = "ti,tps6594-q1";
 		reg = <0x48>;
 		system-power-controller;
@@ -270,14 +275,27 @@
 		gpio-controller;
 		#gpio-cells = <2>;
 		ti,primary-pmic;
+#if 0 //wucl debug: PMIC
 		buck1234-supply = <&vsys_3v3>;
 		buck5-supply = <&vsys_3v3>;
 		ldo1-supply = <&vsys_3v3>;
 		ldo2-supply = <&vsys_3v3>;
 		ldo3-supply = <&vsys_3v3>;
 		ldo4-supply = <&vsys_3v3>;
+#else
+
+		buck12-supply = <&vsys_3v3>;
+		buck3-supply = <&vsys_3v3>;
+		buck4-supply = <&vsys_3v3>;
+		buck5-supply = <&vsys_3v3>;
+		ldo1-supply = <&vsys_3v3>;
+		ldo2-supply = <&vsys_3v3>;
+		ldo3-supply = <&vsys_3v3>;
+		ldo4-supply = <&vsys_3v3>;
+#endif
 
 		regulators {
+#if 0 //wucl debug: PMIC
 			bucka1234: buck1234 {
 				regulator-name = "vdd_cpu_avs";
 				regulator-min-microvolt = <600000>;
@@ -326,9 +344,76 @@
 				regulator-boot-on;
 				regulator-always-on;
 			};
+#else
+
+			bucka12: buck12 {
+				regulator-name = "vdd_ddr_1v1";
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-boot-on;
+				regulator-always-on;
+				bootph-pre-ram;
+			};
+
+			bucka3: buck3 {
+				regulator-name = "vdd_ram_0v85";
+				regulator-min-microvolt = <850000>;
+				regulator-max-microvolt = <850000>;
+				regulator-boot-on;
+				regulator-always-on;
+				bootph-pre-ram;
+			};
+
+			bucka4: buck4 {
+				regulator-name = "vdd_io_1v8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
+				bootph-pre-ram;
+			};
+
+			bucka5: buck5 {
+				regulator-name = "vdd_mcu_0v85";
+				regulator-min-microvolt = <850000>;
+				regulator-max-microvolt = <850000>;
+				regulator-boot-on;
+				regulator-always-on;
+				bootph-pre-ram;
+			};
+
+			ldoa1: ldo1 {
+				regulator-name = "vdd_mcuio_1v8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldoa2: ldo2 {
+				status = "disabled";
+			};
+
+			ldoa3: ldo3 {
+				regulator-name = "vda_dll_0v8";
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			ldoa4: ldo4 {
+				regulator-name = "vda_mcu_1v8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+#endif
 		};
 	};
 
+#if 0 //wucl debug: HCPS
 	tps659414: pmic@4c {
 		compatible = "ti,tps6594-q1";
 		reg = <0x4c>;
@@ -442,6 +527,28 @@
 			};
 		};
 	};
+#else
+	tps62873a: regulator@40 {
+		compatible = "ti,tps62873";
+		reg = <0x40>;
+		bootph-pre-ram;
+		regulator-name = "VDD_CPU_AVS";
+		regulator-min-microvolt = <760000>;
+		regulator-max-microvolt = <840000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	tps62873b: regulator@43 {
+		compatible = "ti,tps62873";
+		reg = <0x43>;
+		regulator-name = "VDD_CORE_0V8";
+		regulator-min-microvolt = <760000>;
+		regulator-max-microvolt = <840000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+#endif
 };
 
 &main_i2c0 {
@@ -450,6 +557,7 @@
 	pinctrl-0 = <&main_i2c0_pins_default>;
 	clock-frequency = <400000>;
 
+#if 0 //wucl debug
 	exp_som: gpio@21 {
 		compatible = "ti,tca6408";
 		reg = <0x21>;
@@ -460,17 +568,20 @@
 				  "GPIO_RGMII1_RST", "GPIO_eDP_ENABLE",
 				   "GPIO_LIN_EN", "CAN_STB";
 	};
+#endif
 };
 
+#if 0 //wucl debug 
 &main_mcan16 {
 	status = "okay";
 	pinctrl-0 = <&main_mcan16_pins_default>;
 	pinctrl-names = "default";
 	phys = <&transceiver0>;
 };
+#endif
 
 &ospi0 {
-	status = "okay";
+	status = "disabled"; //wucl debug 
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcu_fss0_ospi0_pins_default>, <&mcu_fss0_ospi0_1_pins_default>;
 
@@ -736,7 +847,9 @@
 		clock-names = "refclk";
 		clocks = <&edp1_refclk>;
 
+#if 0 //wucl debug
 		enable-gpios = <&exp_som 5 0>;
+#endif
 
 		vpll-supply = <&vsys_io_1v8>;
 		vccio-supply = <&vsys_io_1v8>;

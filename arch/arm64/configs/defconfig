@@ -1282,7 +1282,20 @@ CONFIG_RTC_DRV_MAX77686=y
 CONFIG_RTC_DRV_RK808=m
 CONFIG_RTC_DRV_ISL1208=m
 CONFIG_RTC_DRV_PCF85063=m
-CONFIG_RTC_DRV_PCF85363=m
+# Mo 68A RTC stack (BCS-INH):
+# - Disable TPS6594 PMIC on-chip RTC (no VBACKUP battery, resets on power loss
+#   and otherwise races PCF85363 for rtc0).
+# - Build PCF85363 in-kernel and enable HCTOSYS/SYSTOHC so kernel reads RTC
+#   at register time and writes it back on shutdown — without this, system
+#   clock never inherits PCF85363's battery-backed time.
+# - Note: also `apt remove fake-hwclock` in userspace (otherwise it overwrites
+#   the HCTOSYS-set system clock during early boot).
+# CONFIG_RTC_DRV_TPS6594 is not set
+CONFIG_RTC_DRV_PCF85363=y
+CONFIG_RTC_HCTOSYS=y
+CONFIG_RTC_HCTOSYS_DEVICE="rtc0"
+CONFIG_RTC_SYSTOHC=y
+CONFIG_RTC_SYSTOHC_DEVICE="rtc0"
 CONFIG_RTC_DRV_PCF8563=m
 CONFIG_RTC_DRV_M41T80=m
 CONFIG_RTC_DRV_BQ32K=m

@@ -369,6 +369,23 @@ config ZIIRAVE_WATCHDOG
 	  To compile this driver as a module, choose M here: the
 	  module will be called ziirave_wdt.
 
+config TPS6594_WATCHDOG
+	tristate "TI TPS6594-Q1 PMIC watchdog"
+	depends on I2C
+	select WATCHDOG_CORE
+	help
+	  Standalone i2c driver for the watchdog block inside the TI TPS6594-Q1
+	  (and TPS6593-Q1) PMIC, addressed via the PMIC's dedicated I2C2 port
+	  (the WDG/ESM page). Operates in Q&A mode using the datasheet reference
+	  answer table.
+
+	  Use this when board NVM has mapped the WDG page to a separate i2c bus
+	  from the main PMIC user page; the TPS6594 MFD driver in this kernel
+	  cannot reach the watchdog registers in that topology.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called tps6594-wdt.
+
 config RAVE_SP_WATCHDOG
 	tristate "RAVE SP Watchdog timer"
 	depends on RAVE_SP_CORE

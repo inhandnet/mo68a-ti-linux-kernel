@@ -84,6 +84,41 @@
 			mux-reg-masks = <0x0 0x10000000>;
 		};
 
+		/*
+		 * PCIE_REFCLK1_CLKSEL (physical 0x108074): CLK_EN=bit[8],
+		 * CLK_SEL=bits[1:0] (0=SERDES0_REF_DER, 1=MAIN_PLL2, 2=SERDES0_REF).
+		 * Errata i2308: on affected silicon die PCIE_REFCLK3 pads route to
+		 * PCIE_REFCLK1_P/N_OUT (AH10/AH11); set both REFCLK1 and REFCLK3
+		 * CLKSEL for future-proofing. See also pcie_refclk3_clksel below.
+		 */
+		pcie_refclk1_clksel: pcie-refclk1-clksel@4074 {
+			compatible = "syscon";
+			reg = <0x4074 0x4>;
+		};
+
+		/*
+		 * PCIE_REFCLK3_CLKSEL (physical 0x10807c): Errata i2308 workaround.
+		 * On affected silicon, setting this register selects the clock source
+		 * for die PCIE_REFCLK3 pads which drive PCIE_REFCLK1_P/N_OUT (AH10/AH11).
+		 * Not present in public register spreadsheet; address inferred from
+		 * J721E/J784S4 family register layout (REFCLK1@0x4074, REFCLK3@0x407c).
+		 * Verified as valid register (reads 0x00000000 on cold boot).
+		 */
+		pcie_refclk3_clksel: pcie-refclk3-clksel@407c {
+			compatible = "syscon";
+			reg = <0x407c 0x4>;
+		};
+
+		/*
+		 * ACSPCIE0_CTRL (physical 0x118090): bits[1:0]=PWRDN1/PWRDN0,
+		 * default=0x3 (both PAD output buffers disabled).
+		 * Clear to enable PCIE_REFCLK1_P/N_OUT (AH10/AH11) differential output.
+		 */
+		acspcie_proxy_ctrl: acspcie-proxy-ctrl@14090 {
+			compatible = "syscon";
+			reg = <0x14090 0x4>;
+		};
+
 		audio_refclk1: clock-controller@42e4 {
 			compatible = "ti,am62-audio-refclk";
 			reg = <0x42e4 0x4>;
@@ -151,6 +186,36 @@
 		power-domains = <&k3_pds 165 TI_SCI_PD_EXCLUSIVE>;
 		clocks = <&ehrpwm_tbclk 5>, <&k3_clks 165 0>;
 		clock-names = "tbclk", "fck";
+		status = "disabled";
+	};
+
+	main_ecap0: pwm@3100000 {
+		compatible = "ti,am654-ecap", "ti,am3352-ecap";
+		#pwm-cells = <3>;
+		reg = <0x00 0x3100000 0x00 0x60>;
+		power-domains = <&k3_pds 92 TI_SCI_PD_EXCLUSIVE>;
+		clocks = <&k3_clks 92 0>;
+		clock-names = "fck";
+		status = "disabled";
+	};
+
+	main_ecap1: pwm@3110000 {
+		compatible = "ti,am654-ecap", "ti,am3352-ecap";
+		#pwm-cells = <3>;
+		reg = <0x00 0x3110000 0x00 0x60>;
+		power-domains = <&k3_pds 93 TI_SCI_PD_EXCLUSIVE>;
+		clocks = <&k3_clks 93 0>;
+		clock-names = "fck";
+		status = "disabled";
+	};
+
+	main_ecap2: pwm@3120000 {
+		compatible = "ti,am654-ecap", "ti,am3352-ecap";
+		#pwm-cells = <3>;
+		reg = <0x00 0x3120000 0x00 0x60>;
+		power-domains = <&k3_pds 94 TI_SCI_PD_EXCLUSIVE>;
+		clocks = <&k3_clks 94 0>;
+		clock-names = "fck";
 		status = "disabled";
 	};
 

@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * DT Overlay for RPi 7inch DSI touchscreen panel on Panda AI 1 MAX
+ * Panel connected to J24 FPC (MIPI0 → DSI0 TX via TMUX6462ECR U3, SEL=LOW=0)
+ *
+ * Signal path:
+ *   DSS VP2 → dpi2_out → dsi0_in → dsi0 TX (dphy_tx0) → MIPI0 mux U3 (SEL=0) → J24 FPC
+ *   → TC358762 DSI-to-DPI bridge → RPi 7inch panel (800×480)
+ * I2C: main_i2c5 (Y24=SCL, W23=SDA): panel regulator @0x45, FT5406 touch @0x38
+ *
+ * J24 (MIPI0) carries DSI0 signals (from dphy_tx0, the CDN DSI TX).
+ * J25 (MIPI1) carries DSI1 signals (a separate physical path, not driven by dsi0).
+ * Connect TC358762 + RPi panel to J24, NOT J25.
+ *
+ * What this overlay does:
+ *   1. Disables the on-board SN65DSI86 eDP bridge (frees dsi0_out)
+ *   2. Enables DSS VP2 → DSI0 connection (dpi2_out ↔ dsi0_in)
+ *   3. Adds TC358762 DSI-to-DPI bridge as DSI0 client
+ *   4. Redirects dsi0_out to TC358762 bridge input
+ *   5. Adds RPi panel power regulator and FT5406 touch to main_i2c5
+ *
+ * MIPI0 mux (U3) default idle-state=0 (DSI0 mode, SEL=LOW) — no change needed.
+ * dphy_tx0 and dsi0 are already enabled in the base board DTS.
+ * DSS clocks for VP2→DSI are already assigned in base board DTS.
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+
+/* Bridge power regulator and panel nodes at root level */
+&{/} {
+	bridge_reg: bridge-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "bridge-reg";
+		gpio = <&display_reg 0 0>;
+		vin-supply = <&display_reg>;
+		enable-active-high;
+	};
+
+	panel0 {
+		compatible = "raspberrypi,7inch-dsi", "simple-panel";
+		backlight = <&display_reg>;
+		power-supply = <&display_reg>;
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&panel_bridge_out>;
+			};
+		};
+	};
+};
+
+/* Disable on-board SN65DSI86 eDP bridge to free the DSI TX output */
+&dsi_edp_bridge {
+	status = "disabled";
+};
+
+/* main_i2c5 (Y24=SCL, W23=SDA): RPi panel power reg + FT5406 touch on J24 FPC */
+&main_i2c5 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	display_reg: regulator@45 {
+		compatible = "raspberrypi,7inch-touchscreen-panel-regulator";
+		reg = <0x45>;
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+
+	touch-controller@38 {
+		compatible = "edt,edt-ft5406";
+		reg = <0x38>;
+		touchscreen-size-x = <800>;
+		touchscreen-size-y = <480>;
+		vcc-supply = <&display_reg>;
+		reset-gpios = <&display_reg 1 1>;
+		touchscreen-inverted-x;
+		touchscreen-inverted-y;
+	};
+};
+
+/* Enable DSS VP2 → DSI0 input link (port@2 was status="disabled" in base DTS) */
+&dss_ports {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	port@2 {
+		reg = <2>;
+		status = "okay";
+		dpi2_out: endpoint {
+			remote-endpoint = <&dsi0_in>;
+		};
+	};
+};
+
+/*
+ * DSI0: reroute port@0 output from SN65DSI86 to TC358762, and connect
+ * port@1 input from DSS VP2. TC358762 bridge converts DSI to parallel RGB
+ * for the RPi 7inch panel.
+ */
+&dsi0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			dsi0_out: endpoint {
+				remote-endpoint = <&panel_bridge_in>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			dsi0_in: endpoint {
+				remote-endpoint = <&dpi2_out>;
+			};
+		};
+	};
+
+	bridge@0 {
+		compatible = "toshiba,tc358762";
+		reg = <0>;
+		vddc-supply = <&bridge_reg>;
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_bridge_in: endpoint {
+					remote-endpoint = <&dsi0_out>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+				panel_bridge_out: endpoint {
+					remote-endpoint = <&panel_in>;
+				};
+			};
+		};
+	};
+};

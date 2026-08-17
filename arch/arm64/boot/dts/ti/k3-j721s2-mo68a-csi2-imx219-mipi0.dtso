@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * DT Overlay for Sony IMX219 (RPi Camera V2.1) on Panda AI 1 MAX
+ * Camera on J24 FPC (MIPI0 → CSI0)
+ *
+ * Signal routing:
+ *   J24 FPC → TMUX6462ECR U3 (mipi0_mux, SEL=LOW=CSI) → DPHY0 → cdns_csi2rx0 → ti_csi2rx0
+ *   I2C: main_i2c5 (Y24=SCL, W23=SDA)
+ *   CSI_PWDN0: GPIO0_47 (V28), active-high XSHUTDOWN for J24 camera
+ *     (hogged HIGH in base DTS — do NOT use reset-gpios here)
+ *
+ * MCLK status: Board has NO external 24 MHz oscillator (confirmed from schematic).
+ *   J24 FPC pin 19 (MREFC(K) net) connects to SoC ball AD28 (EXT_REFCLK1/MCASP4_ACLKX).
+ *   AD28 must generate camera MCLK. Two options:
+ *
+ *   Option A (RECOMMENDED - hardware): Populate a 24 MHz CMOS oscillator on the
+ *     MREFC(K) net footprint (component K1 or similar). Then enable IMX219 below.
+ *     clk_imx219_fixed = 24 MHz in base DTS is correct for this case.
+ *
+ *   Option B (software): Configure McASP4 in TX-clk-master mode (MCASP4_ACLKX on AD28)
+ *     with AUX_CLK = 196.608 MHz, CLKXDIV = 7 → ACLKX = 24.576 MHz.
+ *     Requires: imx219.c patch to accept 24576000 Hz, McASP4 initialization at boot,
+ *     and updated link-frequencies (466944000 Hz). See notes below.
+ *
+ *   CURRENT STATUS: imx219 node is DISABLED to prevent I2C bus lockup caused by
+ *     camera activating (XSHUTDOWN HIGH) without MCLK. Enable after MCLK is provided.
+ *
+ * Note: J24 and J25 FPC connectors share main_i2c5 (Y24/W23). Both IMX219
+ * cameras use I2C address 0x10. Only one camera sensor node can be registered
+ * on the same I2C bus. For dual-camera support, an external I2C mux (e.g.
+ * PCA9543) is required between I2C5 and the FPC connectors.
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+
+/*
+ * Switch MIPI0 mux (U3 TMUX6462ECR) to CSI mode for IMX219 camera on J24 FPC.
+ * On Panda AI 1 MAX: SEL=HIGH (state=1) → CSI path, SEL=LOW (state=0) → DSI path.
+ * (Opposite of original DTS comment which had polarity inverted.)
+ */
+&mipi0_mux {
+	idle-state = <1>;
+};
+
+/*
+ * IMX219 camera on J24 FPC, I2C5 (Y24/W23), address 0x10.
+ * Clock: 24MHz fixed clock (clk_imx219_fixed defined in base board DTS).
+ *
+ * CSI_PWDN0 (GPIO0_47, V28): directly connected to IMX219 XSHUTDOWN (no inverter).
+ * IMX219 XSHUTDOWN polarity: HIGH = normal operation, LOW = shutdown.
+ * Use GPIO_ACTIVE_HIGH so GPIOD_OUT_HIGH drives XSHUTDOWN HIGH at probe time.
+ */
+&main_i2c5 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	imx219_0: imx219-0@10 {
+		compatible = "sony,imx219";
+		reg = <0x10>;
+
+		clocks = <&clk_imx219_fixed>;
+		/* reset-gpios removed: GPIO0_47 (CSI_PWDN0) is hogged HIGH in base DTS */
+
+		port {
+			csi2_cam0: endpoint {
+				remote-endpoint = <&csi2rx0_in_sensor>;
+				link-frequencies = /bits/ 64 <456000000>; /* 24 MHz MCLK: 4.0 MHz × PLL_OP_MPY(114) */
+				/* was 466944000 for McASP4 24.576 MHz MCLK approach (reverted) */
+				clock-lanes = <0>;
+				data-lanes = <1 2>;
+			};
+		};
+	};
+};
+
+/* DPHY0: D-PHY receiver for CSI0 */
+&dphy0 {
+	status = "okay";
+};
+
+/* ti_csi2rx0: TI CSI2 RX shim + DMA for CSI0 */
+&ti_csi2rx0 {
+	status = "okay";
+};
+
+/* cdns_csi2rx0: Cadence CSI2 RX bridge for CSI0, port@0 → IMX219 */
+&cdns_csi2rx0 {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		csi0_port0: port@0 {
+			reg = <0>;
+			status = "okay";
+
+			csi2rx0_in_sensor: endpoint {
+				remote-endpoint = <&csi2_cam0>;
+				bus-type = <4>; /* CSI2 DPHY */
+				clock-lanes = <0>;
+				data-lanes = <1 2>;
+			};
+		};
+
+		csi0_port1: port@1 { reg = <1>; status = "disabled"; };
+		csi0_port2: port@2 { reg = <2>; status = "disabled"; };
+		csi0_port3: port@3 { reg = <3>; status = "disabled"; };
+		csi0_port4: port@4 { reg = <4>; status = "disabled"; };
+	};
+};

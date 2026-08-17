@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * DT Overlay: enable mcu_i2c0 + bind tps6594-wdt to PMIC WDG slave 0x12
+ *
+ * Mo 68A wires the TPS6594 PMIC's dedicated I2C2 (watchdog/ESM page) to
+ * the SoC's mcu_i2c0 controller. The PMIC NVM places the WDG page on slave
+ * address 0x12. The primary PMIC instance (regulators / GPIO / RTC / PFSM /
+ * ESM) stays on wkup_i2c0 + 0x48 via the standard MFD driver and is
+ * untouched here.
+ *
+ * Physical wiring (Mo 68A v1.1 schematic, page 14):
+ *   G24 MCU_I2C0_SCL -> TPS6594 pin 32 (GPIO1 configured as I2C2 SCL)
+ *   J25 MCU_I2C0_SDA -> TPS6594 pin 33 (GPIO2 configured as I2C2 SDA)
+ *
+ * Domain note: balls G24/J25 are in the WKUP pad cell (so the pinmux is
+ *   written through wkup_pmx2), but mux value 0 routes them to MCU_I2C0
+ *   (controller in MCU domain).
+ *
+ * This overlay supersedes k3-j721s2-mo68a-probe-mcui2c0.dtso — do NOT load
+ * both at once.
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include "k3-pinctrl.h"
+
+&wkup_pmx2 {
+	mo68a_pmic_i2c2_pins_default: mo68a-pmic-i2c2-default-pins {
+		pinctrl-single,pins = <
+			J721S2_WKUP_IOPAD(0x0a0, PIN_INPUT, 0)  /* (G24) MCU_I2C0_SCL */
+			J721S2_WKUP_IOPAD(0x0a4, PIN_INPUT, 0)  /* (J25) MCU_I2C0_SDA */
+		>;
+	};
+};
+
+&mcu_i2c0 {
+	status = "okay";
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mo68a_pmic_i2c2_pins_default>;
+
+	tps6594_wdt: pmic@12 {
+		compatible = "ti,tps6594-wdt";
+		reg = <0x12>;
+	};
+};

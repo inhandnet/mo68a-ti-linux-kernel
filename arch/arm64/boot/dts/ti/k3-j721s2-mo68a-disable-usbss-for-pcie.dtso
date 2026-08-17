@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0
+/**
+ * Mo 68A SerDes overlay: disable USB SS for PCIe.
+ *
+ * Switches SerDes from default (eDP + USB 3.0 SS) to (eDP + PCIe).
+ * USB falls back to USB 2.0 HS; eDP stays enabled.
+ *
+ * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&serdes0_usb_link {
+	status = "disabled";
+};
+
+&serdes0_pcie_link {
+	status = "okay";
+};
+
+&pcie1_rc {
+	status = "okay";
+};
+
+&usb0 {
+	maximum-speed = "high-speed";
+};
+
+&usbss0 {
+	ti,usb2-only;
+};
