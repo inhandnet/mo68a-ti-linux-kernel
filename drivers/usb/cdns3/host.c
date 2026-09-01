@@ -29,6 +29,49 @@
 #define CFG_RXDET_P3_EN		BIT(15)
 #define LPM_2_STB_SWITCH_EN	BIT(25)
 
+/*
+ * An instance limited to USB 2.0 still brings its SuperSpeed root port up in
+ * Rx.Detect, where the port keeps presenting receiver terminations. A
+ * downstream USB 3.0 hub therefore sees a SuperSpeed-capable upstream and keeps
+ * SuperSpeed enabled on its own downstream ports (USB 3.2 r1.1, section 10.3),
+ * so attached USB 3.0 devices start link training that can never complete.
+ *
+ * Power the SuperSpeed root ports off and drop them from the root hub, so that
+ * the shared HCD is never created. ->start() runs before xhci_plat_probe()
+ * evaluates xhci_has_one_roothub(), hence before the SuperSpeed root hub could
+ * power the ports back on.
+ */
+static void xhci_cdns3_disable_ss_ports(struct usb_hcd *hcd)
+{
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+	struct device *dev = hcd->self.controller->parent;
+	enum usb_device_speed speed;
+	int i;
+
+	if (!dev)
+		return;
+
+	/* Only act when the instance is explicitly declared below SuperSpeed. */
+	speed = usb_get_maximum_speed(dev);
+	if (speed == USB_SPEED_UNKNOWN || speed >= USB_SPEED_SUPER)
+		return;
+
+	for (i = 0; i < xhci->usb3_rhub.num_ports; i++) {
+		__le32 __iomem *addr = xhci->usb3_rhub.ports[i]->addr;
+		u32 portsc = xhci_port_state_to_neutral(readl(addr));
+
+		writel(portsc & ~PORT_POWER, addr);
+	}
+
+	/*
+	 * Drop the SuperSpeed root ports so xhci_has_one_roothub() turns true
+	 * and the shared HCD is never created. Without a SuperSpeed root hub
+	 * usbcore has no path to power the ports back on, neither through
+	 * hub_power_on() nor through hub_port_connect().
+	 */
+	xhci->usb3_rhub.num_ports = 0;
+}
+
 static void xhci_cdns3_plat_start(struct usb_hcd *hcd)
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
@@ -48,6 +91,8 @@ static void xhci_cdns3_plat_start(struct usb_hcd *hcd)
 		value |= LPM_2_STB_SWITCH_EN;
 		writel(value, hcd->regs + XECP_PORT_CAP_REG);
 	}
+
+	xhci_cdns3_disable_ss_ports(hcd);
 }
 
 static int xhci_cdns3_resume_quirk(struct usb_hcd *hcd)
