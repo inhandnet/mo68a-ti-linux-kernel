@@ -23,8 +23,9 @@
  *   long-window timer restarts. If userspace stops feeding, the long-window
  *   timeout (1s..770s) elapses and the PMIC issues a warm reset.
  *
- * Window-1 / Window-2 are kept short (~5ms each) — they only bracket the
- *   four-byte Q&A handshake itself, not the user-visible timeout.
+ * Window-1 / Window-2 bracket the four-byte Q&A handshake itself, not the
+ *   user-visible timeout, and are set to maximum (~70ms each) so the answer
+ *   writes tolerate scheduling jitter.
  *
  * Copyright (C) 2026 Beijing InHand Networks Technology Co., Ltd.
  */
@@ -53,12 +54,28 @@
 #define WD_MODE_SELECT_QA		BIT(1)
 #define WD_MODE_RETURN_LONGWIN		BIT(0)
 
-/* WD_THR_CFG bits */
+/* WD_THR_CFG bits — datasheet ZHCSKK3B §8.7.1.193 */
 #define WD_THR_RST_EN			BIT(7)
 #define WD_THR_WD_EN			BIT(6)
-#define WD_THR_RST_TH_SHIFT		3
-#define WD_THR_RST_TH_MASK		GENMASK(5, 3)
-#define WD_THR_FAIL_TH_MASK		GENMASK(2, 0)
+#define WD_THR_FAIL_TH_SHIFT		3
+#define WD_THR_FAIL_TH_MASK		GENMASK(5, 3)
+#define WD_THR_RST_TH_MASK		GENMASK(2, 0)
+
+/* WD_ERR_STATUS bits — all R/W1C */
+#define WD_ERR_RST_INT			BIT(7)
+#define WD_ERR_FAIL_INT			BIT(6)
+#define WD_ERR_ANSW_ERR			BIT(5)
+#define WD_ERR_SEQ_ERR			BIT(4)
+#define WD_ERR_ANSW_EARLY		BIT(3)
+#define WD_ERR_TRIG_EARLY		BIT(2)
+#define WD_ERR_TIMEOUT			BIT(1)
+#define WD_ERR_LONGWIN_TIMEOUT		BIT(0)
+#define WD_ERR_ALL			GENMASK(7, 0)
+
+/* Anything here means the last Q&A sequence did not complete cleanly. */
+#define WD_ERR_SEQ_FAIL			(WD_ERR_ANSW_ERR | WD_ERR_SEQ_ERR | \
+					 WD_ERR_ANSW_EARLY | WD_ERR_TRIG_EARLY | \
+					 WD_ERR_TIMEOUT)
 
 /* WD_QUESTION_ANSW_CNT bits */
 #define WD_QA_QUESTION_MASK		GENMASK(3, 0)
@@ -67,26 +84,34 @@
 #define WD_WIN_CFG_MASK			GENMASK(6, 0)
 
 /*
- * Window-1/2 are ~5ms each: WIN_VAL=8 -> t = (8+1) * 0.55 = ~5ms.
- * Empirically generous enough that 3 i2c writes (~1ms) fit in W1 with margin,
- * and the inter-answer sleep below lands Answer-0 cleanly in W2.
+ * Windows at maximum: t = (WIN_VAL + 1) * 0.55 ms +-5%, so 0x7f -> 66.9-73.9 ms.
+ * Answer-0 must land in Window-2, i.e. between 73.9 and 133.8 ms worst case;
+ * 100 ms sits mid-slot with ~26 ms slack either side.
  */
-#define TPS6594_WIN1_VAL		8
-#define TPS6594_WIN2_VAL		8
-#define TPS6594_W1_SLEEP_US_MIN		6000
-#define TPS6594_W1_SLEEP_US_MAX		7000
+#define TPS6594_WIN1_VAL		0x7f
+#define TPS6594_WIN2_VAL		0x7f
+#define TPS6594_W1_SLEEP_MS		100
 
 /*
- * Fail/Reset thresholds: tolerate up to (FAIL_TH + RST_TH + 1) bad sequences
- * before the PMIC issues WD_ERROR. With FAIL_TH=2 and RST_TH=2 that is 5
- * consecutive misses, comfortable margin against transient i2c glitches.
+ * NVM defaults, left as-is. They have no effect here: the device clears
+ * WD_FAIL_CNT whenever the watchdog re-enters the Long Window (§8.7.1.194),
+ * and WD_RETURN_LONGWIN puts it back there after every sequence, so FAIL_TH
+ * and RST_TH are never reached. The reset path in this mode is the long-window
+ * timeout alone — a bad sequence is visible in WD_ERR_STATUS but does not by
+ * itself force a reset.
  */
-#define TPS6594_FAIL_TH			2
-#define TPS6594_RST_TH			2
+#define TPS6594_FAIL_TH			7
+#define TPS6594_RST_TH			7
+
+/*
+ * Retries for a write to a register that is locked outside the Long Window.
+ * Spaced a window pair apart so a sequence in flight has returned by then.
+ */
+#define TPS6594_LOCKED_WRITE_TRIES	4
 
 #define TPS6594_WDT_MIN_TIMEOUT		1
 #define TPS6594_WDT_MAX_TIMEOUT		770
-#define TPS6594_WDT_DEFAULT_TIMEOUT	30
+#define TPS6594_WDT_DEFAULT_TIMEOUT	32
 
 /*
  * Reference answers for the default WD_QA_CFG (LFSR=00, FDBK=00, SEED=1010).
@@ -158,21 +183,37 @@ static int tps6594_wdt_write(struct tps6594_wdt *wdt, u8 reg, u8 val)
 	return i2c_smbus_write_byte_data(wdt->client, reg, val);
 }
 
+static int tps6594_wdt_answer(struct tps6594_wdt *wdt, const u8 *ans, int n)
+{
+	int i, ret;
+
+	for (i = 0; i < n; i++) {
+		ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_ANSWER, ans[i]);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
 /*
- * One complete Q&A sequence: read current question, write Answer-3/2/1 in
- * Window-1, sleep past W1, write Answer-0 in Window-2. WD_RETURN_LONGWIN is
- * asserted so the PMIC re-enters Long Window after Answer-0 — this restarts
- * the long-window timeout, which is what gives us user-visible timeout.
+ * One feed, two rounds.
+ *
+ * Per §8.3.11.3 the four WD_ANSWER writes that take the watchdog out of the
+ * Long Window are the exit handshake; the first watchdog sequence only starts
+ * after them. A feed therefore has to answer twice: four writes to get out,
+ * then the sequence itself — Answer-3/2/1 inside Window-1, Answer-0 inside
+ * Window-2. Writing only the first four (as this driver used to) leaves the
+ * sequence unanswered, which measures as WD_SEQ_ERR at +70 ms and WD_TIMEOUT
+ * at +140 ms with WD_QUESTION never advancing.
+ *
+ * WD_RETURN_LONGWIN stays asserted, so the sequence ends back in the Long
+ * Window with its timeout restarted — that is what makes the user-visible
+ * timeout the long-window value rather than a window pair.
  */
 static int tps6594_wdt_do_qa(struct tps6594_wdt *wdt)
 {
 	const u8 *ans;
-	int mode, q, ret, i;
-
-	q = tps6594_wdt_read(wdt, TPS6594_WDG_WD_QUESTION_ANSW);
-	if (q < 0)
-		return q;
-	ans = tps6594_qa_table[q & WD_QA_QUESTION_MASK];
+	int mode, q, ret;
 
 	mode = tps6594_wdt_read(wdt, TPS6594_WDG_WD_MODE_REG);
 	if (mode < 0)
@@ -183,23 +224,63 @@ static int tps6594_wdt_do_qa(struct tps6594_wdt *wdt)
 	if (ret)
 		return ret;
 
-	/* Answer-3, Answer-2, Answer-1 in Window-1 */
-	for (i = 0; i < 3; i++) {
-		ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_ANSWER, ans[i]);
-		if (ret)
-			return ret;
-	}
+	/* Exit handshake — untimed, the Long Window has no window pair */
+	q = tps6594_wdt_read(wdt, TPS6594_WDG_WD_QUESTION_ANSW);
+	if (q < 0)
+		return q;
+	ret = tps6594_wdt_answer(wdt, tps6594_qa_table[q & WD_QA_QUESTION_MASK], 4);
+	if (ret)
+		return ret;
 
-	usleep_range(TPS6594_W1_SLEEP_US_MIN, TPS6594_W1_SLEEP_US_MAX);
+	/* Window-1 of the first sequence is running from here */
+	q = tps6594_wdt_read(wdt, TPS6594_WDG_WD_QUESTION_ANSW);
+	if (q < 0)
+		return q;
+	ans = tps6594_qa_table[q & WD_QA_QUESTION_MASK];
+	ret = tps6594_wdt_answer(wdt, ans, 3);
+	if (ret)
+		return ret;
 
-	/* Answer-0 in Window-2 — sequence completes, device returns to LongWin */
+	msleep(TPS6594_W1_SLEEP_MS);
+
 	return tps6594_wdt_write(wdt, TPS6594_WDG_WD_ANSWER, ans[3]);
 }
 
 /*
- * Configure registers that are write-locked once the watchdog leaves Long
- * Window. Must be called only while we are in Long Window (e.g. before
- * the very first ping, or right after a ping returned us to Long Window).
+ * WD_WIN1/WIN2/LONGWIN, WD_EN and the threshold fields are write-locked while
+ * the watchdog sits outside the Long Window (§8.3.11.3), and the PMIC ACKs the
+ * locked write on I2C before discarding it. Write, read back, and retry a
+ * window pair apart, so a dropped write becomes an error instead of a
+ * configuration that silently stayed at its previous value. Measured: a write
+ * issued ~1 ms after Answer-0 is dropped, one issued ~20 ms later lands.
+ */
+static int tps6594_wdt_write_verify(struct tps6594_wdt *wdt, u8 reg, u8 val)
+{
+	int ret, i;
+
+	for (i = 0; i < TPS6594_LOCKED_WRITE_TRIES; i++) {
+		ret = tps6594_wdt_write(wdt, reg, val);
+		if (ret)
+			return ret;
+
+		ret = tps6594_wdt_read(wdt, reg);
+		if (ret < 0)
+			return ret;
+		if (ret == val)
+			return 0;
+
+		msleep(TPS6594_W1_SLEEP_MS);
+	}
+
+	dev_err(&wdt->client->dev,
+		"reg 0x%02x kept rejecting 0x%02x (reads 0x%02x)\n",
+		reg, val, ret);
+	return -EIO;
+}
+
+/*
+ * Configure the write-locked registers. Must be called only with the Long
+ * Window freshly restarted -- see the hazard note in tps6594_wdt_start().
  */
 static int tps6594_wdt_configure_locked_regs(struct tps6594_wdt *wdt,
 					     unsigned int timeout_s)
@@ -207,38 +288,94 @@ static int tps6594_wdt_configure_locked_regs(struct tps6594_wdt *wdt,
 	u8 thr_cfg;
 	int ret;
 
-	ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_WIN1_CFG,
-				TPS6594_WIN1_VAL & WD_WIN_CFG_MASK);
+	ret = tps6594_wdt_write_verify(wdt, TPS6594_WDG_WD_WIN1_CFG,
+				       TPS6594_WIN1_VAL & WD_WIN_CFG_MASK);
 	if (ret)
 		return ret;
-	ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_WIN2_CFG,
-				TPS6594_WIN2_VAL & WD_WIN_CFG_MASK);
+	ret = tps6594_wdt_write_verify(wdt, TPS6594_WDG_WD_WIN2_CFG,
+				       TPS6594_WIN2_VAL & WD_WIN_CFG_MASK);
 	if (ret)
 		return ret;
-	ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_LONGWIN_CFG,
-				tps6594_secs_to_longwin(timeout_s));
+	ret = tps6594_wdt_write_verify(wdt, TPS6594_WDG_WD_LONGWIN_CFG,
+				       tps6594_secs_to_longwin(timeout_s));
 	if (ret)
 		return ret;
 
 	thr_cfg = WD_THR_RST_EN | WD_THR_WD_EN |
-		  ((TPS6594_RST_TH << WD_THR_RST_TH_SHIFT) & WD_THR_RST_TH_MASK) |
-		  (TPS6594_FAIL_TH & WD_THR_FAIL_TH_MASK);
-	return tps6594_wdt_write(wdt, TPS6594_WDG_WD_THR_CFG, thr_cfg);
+		  ((TPS6594_FAIL_TH << WD_THR_FAIL_TH_SHIFT) & WD_THR_FAIL_TH_MASK) |
+		  (TPS6594_RST_TH & WD_THR_RST_TH_MASK);
+	return tps6594_wdt_write_verify(wdt, TPS6594_WDG_WD_THR_CFG, thr_cfg);
 }
 
 static int tps6594_wdt_start(struct watchdog_device *wdd)
 {
 	struct tps6594_wdt *wdt = watchdog_get_drvdata(wdd);
-	int ret;
+	struct device *dev = &wdt->client->dev;
+	int thr, ret;
 
-	ret = tps6594_wdt_configure_locked_regs(wdt, wdd->timeout);
-	if (ret)
-		return ret;
+	thr = tps6594_wdt_read(wdt, TPS6594_WDG_WD_THR_CFG);
+	if (thr < 0)
+		return thr;
 
-	/* Kick off the first Q&A; sequence end returns us to LongWindow with
-	 * the timeout timer counting down.
+	/*
+	 * If the PMIC already has the watchdog enabled — the NVM default, and
+	 * still true across a warm reset — it has been sitting in the Long
+	 * Window for an unknown time, quite possibly longer than the timeout we
+	 * are about to program. Shortening WD_LONGWIN_CFG below the time
+	 * already spent in the window kills the SoC on the spot: the serial
+	 * console goes silent inside 21 ms, reproducible with that single
+	 * write. (§8.3.11.2 promises only that the time-out stops working;
+	 * measured silicon is far worse.) One complete Q&A sequence restarts
+	 * the Long Window counter from zero, which makes the write safe — so
+	 * demand proof that the sequence was clean before trusting it, and let
+	 * the PMIC finish returning to the Long Window first, since a write
+	 * issued immediately after Answer-0 is silently dropped instead.
+	 *
+	 * Deliberately do not clear WD_EN to dodge all this. That would leave
+	 * the SoC unprotected across the following writes and, on any error
+	 * return below, disarmed for good. Failing with the watchdog still
+	 * armed at its NVM window is the safe direction to fail in.
 	 */
-	return tps6594_wdt_do_qa(wdt);
+	if (thr & WD_THR_WD_EN) {
+		ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_ERR_STATUS,
+					WD_ERR_ALL);
+		if (ret)
+			return ret;
+
+		ret = tps6594_wdt_do_qa(wdt);
+		if (ret)
+			return ret;
+
+		ret = tps6594_wdt_read(wdt, TPS6594_WDG_WD_ERR_STATUS);
+		if (ret < 0)
+			return ret;
+		if (ret & WD_ERR_SEQ_FAIL) {
+			dev_err(dev,
+				"Q&A sequence failed (WD_ERR_STATUS=0x%02x); refusing to reprogram the Long Window\n",
+				ret);
+			return -EIO;
+		}
+
+		msleep(TPS6594_W1_SLEEP_MS);
+	} else {
+		/*
+		 * WD_PWRHOLD must be clear before WD_EN goes back to 1
+		 * (datasheet §8.3.11.2), and the PMIC sets it itself when the
+		 * DISABLE_WDOG pin was asserted at reset. Mo 68A pulls that
+		 * pin low today, but a board that straps it would otherwise
+		 * come up with the watchdog parked in the Long Window: opened,
+		 * active, reporting no error, and never biting.
+		 */
+		ret = tps6594_wdt_read(wdt, TPS6594_WDG_WD_MODE_REG);
+		if (ret < 0)
+			return ret;
+		ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_MODE_REG,
+					(u8)ret & ~WD_MODE_PWRHOLD);
+		if (ret)
+			return ret;
+	}
+
+	return tps6594_wdt_configure_locked_regs(wdt, wdd->timeout);
 }
 
 static int tps6594_wdt_stop(struct watchdog_device *wdd)
@@ -246,14 +383,19 @@ static int tps6594_wdt_stop(struct watchdog_device *wdd)
 	struct tps6594_wdt *wdt = watchdog_get_drvdata(wdd);
 	int thr;
 
-	/* We are in Long Window (last ping returned here). Clearing WD_EN
-	 * is allowed here and halts the long-window timer.
+	/*
+	 * Clearing WD_EN halts the Long Window timer, but WD_EN is on the
+	 * locked-register list, so a stop issued right after a ping can be
+	 * ACKed and dropped. That failure direction is the dangerous one —
+	 * userspace closed the device with the magic character and believes
+	 * the watchdog is disarmed, while it is still counting — so verify
+	 * the readback rather than trust the write.
 	 */
 	thr = tps6594_wdt_read(wdt, TPS6594_WDG_WD_THR_CFG);
 	if (thr < 0)
 		return thr;
-	return tps6594_wdt_write(wdt, TPS6594_WDG_WD_THR_CFG,
-				 (u8)(thr & ~WD_THR_WD_EN));
+	return tps6594_wdt_write_verify(wdt, TPS6594_WDG_WD_THR_CFG,
+					(u8)(thr & ~WD_THR_WD_EN));
 }
 
 static int tps6594_wdt_ping(struct watchdog_device *wdd)
@@ -264,23 +406,32 @@ static int tps6594_wdt_ping(struct watchdog_device *wdd)
 static int tps6594_wdt_set_timeout(struct watchdog_device *wdd,
 				   unsigned int t)
 {
-	struct tps6594_wdt *wdt = watchdog_get_drvdata(wdd);
+	unsigned int old = wdd->timeout;
 	int ret;
 
-	/* WD_LONGWIN_CFG is writeable in Long Window, where we always are
-	 * between pings.
+	/*
+	 * Poking WD_LONGWIN_CFG from here carries exactly the hazard described
+	 * in tps6594_wdt_start(): between pings the watchdog is idle in the
+	 * Long Window, so a value shorter than the time already elapsed there
+	 * kills the SoC — and this path is reachable from userspace through
+	 * WDIOC_SETTIMEOUT. Go through start(), which restarts the window
+	 * first. While inactive there is nothing to program: start() picks
+	 * wdd->timeout up when userspace opens the device.
 	 */
-	ret = tps6594_wdt_write(wdt, TPS6594_WDG_WD_LONGWIN_CFG,
-				tps6594_secs_to_longwin(t));
-	if (ret)
-		return ret;
-
 	wdd->timeout = t;
-	return 0;
+	if (!watchdog_active(wdd))
+		return 0;
+
+	ret = tps6594_wdt_start(wdd);
+	if (ret)
+		wdd->timeout = old;
+
+	return ret;
 }
 
 static const struct watchdog_info tps6594_wdt_info = {
-	.options = WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING | WDIOF_MAGICCLOSE,
+	.options = WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING | WDIOF_MAGICCLOSE |
+		   WDIOF_CARDRESET,
 	.identity = "TPS6594-Q1 Watchdog",
 };
 
@@ -322,6 +473,23 @@ static int tps6594_wdt_probe(struct i2c_client *client)
 				     "PMIC NVM not in Q&A mode (WD_MODE_REG=0x%02x)\n",
 				     ret);
 
+	/*
+	 * WD_RST_INT and WD_LONGWIN_TIMEOUT_INT sit in the PMIC's always-on
+	 * LDOVRTC domain (§8.4.1) and survive the warm reset they cause.
+	 * Long-window expiry is the path this driver takes: WD_RETURN_LONGWIN
+	 * clears WD_FAIL_CNT before it can reach the WD_RST_INT threshold.
+	 * Latch either, then clear the page (R/W1C).
+	 */
+	ret = tps6594_wdt_read(wdt, TPS6594_WDG_WD_ERR_STATUS);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "WD_ERR_STATUS unreadable\n");
+	dev_info(dev, "WD_ERR_STATUS at probe: 0x%02x\n", ret);
+	if (ret & (WD_ERR_RST_INT | WD_ERR_LONGWIN_TIMEOUT))
+		wdt->wdd.bootstatus |= WDIOF_CARDRESET;
+	if (ret & WD_ERR_ANSW_ERR)
+		dev_warn(dev, "stale WD_ANSW_ERR: previous answers were wrong\n");
+	tps6594_wdt_write(wdt, TPS6594_WDG_WD_ERR_STATUS, WD_ERR_ALL);
+
 	wdt->wdd.info = &tps6594_wdt_info;
 	wdt->wdd.ops = &tps6594_wdt_ops;
 	wdt->wdd.parent = dev;
@@ -331,9 +499,18 @@ static int tps6594_wdt_probe(struct i2c_client *client)
 	watchdog_set_drvdata(&wdt->wdd, wdt);
 	watchdog_init_timeout(&wdt->wdd, timeout, dev);
 	watchdog_set_nowayout(&wdt->wdd, nowayout);
-	watchdog_stop_on_reboot(&wdt->wdd);
 	watchdog_stop_on_unregister(&wdt->wdd);
 
+	/*
+	 * Deliberately do not touch WD_LONGWIN_CFG here. The PMIC keeps the
+	 * Long Window counting across a warm reset, so by the time we probe,
+	 * more of it has elapsed than any timeout we would program — and
+	 * shortening it below the elapsed time kills the SoC (datasheet
+	 * §8.3.11.2 says only that the timeout stops working; measured
+	 * behaviour is worse). The NVM's 772 s window stands until userspace
+	 * opens the device, at which point start() reprograms it from Long
+	 * Window with a freshly restarted timer.
+	 */
 	ret = devm_watchdog_register_device(dev, &wdt->wdd);
 	if (ret)
 		return dev_err_probe(dev, ret, "watchdog_register_device failed\n");
