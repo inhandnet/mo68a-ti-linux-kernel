@@ -1239,7 +1239,9 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&dp0_pins_default>;
+#if 0 //wucl 本板 HPD 实连 AA24,EVM 的串阻 R261 为 DNI
 	cdns,no-hpd;
+#endif
 };
 
 &dp0_ports {
