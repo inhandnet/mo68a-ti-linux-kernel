@@ -197,7 +197,6 @@ dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-csi2-imx219-mipi0.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-csi2-imx219-mipi1.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-dsi-rpi-7inch-panel-mipi0.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-wm8960-audio-hat.dtbo
-dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-pmic-watchdog.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-disable-usbss-for-pcie.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-disable-edp-for-pcie.dtbo
 dtb-$(CONFIG_ARCH_K3) += k3-j721s2-mo68a-disable-rtc.dtbo
