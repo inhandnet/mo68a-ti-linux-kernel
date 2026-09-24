@@ -574,9 +574,6 @@ static int omap_mbox_probe(struct platform_device *pdev)
 	controller->chans = chnls;
 	controller->num_chans = info_count;
 	controller->of_xlate = omap_mbox_of_xlate;
-	ret = devm_mbox_controller_register(mdev->dev, controller);
-	if (ret)
-		return ret;
 
 	platform_set_drvdata(pdev, mdev);
 	devm_pm_runtime_enable(mdev->dev);
@@ -594,6 +591,11 @@ static int omap_mbox_probe(struct platform_device *pdev)
 
 	ret = pm_runtime_put_sync(mdev->dev);
 	if (ret < 0 && ret != -ENOSYS)
+		return ret;
+
+	/* wucl: register the controller last to avoid freeing in-use channels */
+	ret = devm_mbox_controller_register(mdev->dev, controller);
+	if (ret)
 		return ret;
 
 	return 0;
