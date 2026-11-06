@@ -540,7 +540,7 @@
 	};
 
 	tps62873b: regulator@43 {
-		compatible = "ti,tps62873";
+		compatible = "ti,tps62871";
 		reg = <0x43>;
 		regulator-name = "VDD_CORE_0V8";
 		regulator-min-microvolt = <760000>;
