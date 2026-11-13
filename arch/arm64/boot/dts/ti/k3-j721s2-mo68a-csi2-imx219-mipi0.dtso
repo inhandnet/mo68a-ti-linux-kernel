@@ -7,7 +7,7 @@
  *   J24 FPC → TMUX6462ECR U3 (mipi0_mux, SEL=LOW=CSI) → DPHY0 → cdns_csi2rx0 → ti_csi2rx0
  *   I2C: main_i2c5 (Y24=SCL, W23=SDA)
  *   CSI_PWDN0: GPIO0_47 (V28), active-high XSHUTDOWN for J24 camera
- *     (hogged HIGH in base DTS — do NOT use reset-gpios here)
+ *     claimed by the sensor node below
  *
  * MCLK status: Board has NO external 24 MHz oscillator (confirmed from schematic).
  *   J24 FPC pin 19 (MREFC(K) net) connects to SoC ball AD28 (EXT_REFCLK1/MCASP4_ACLKX).
@@ -37,6 +37,16 @@
 /plugin/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include "k3-pinctrl.h"
+
+/* XSHUTDOWN pad for the J24 camera. */
+&main_pmx0 {
+	cam0_reset_pins_default: cam0-reset-pins-default {
+		pinctrl-single,pins = <
+			J721S2_IOPAD(0x0bc, PIN_INPUT, 7) /* (V28) MCASP1_AFSX.GPIO0_47 - CSI_PWDN0, PIN_INPUT for readback */
+		>;
+	};
+};
 
 /*
  * Switch MIPI0 mux (U3 TMUX6462ECR) to CSI mode for IMX219 camera on J24 FPC.
@@ -64,7 +74,13 @@
 		reg = <0x10>;
 
 		clocks = <&clk_imx219_fixed>;
-		/* reset-gpios removed: GPIO0_47 (CSI_PWDN0) is hogged HIGH in base DTS */
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&cam0_reset_pins_default>;
+
+		/* XSHUTDOWN is wired straight to the sensor, no inverter:
+		 * HIGH = running, LOW = shutdown. */
+		reset-gpios = <&main_gpio0 47 GPIO_ACTIVE_HIGH>;
 
 		port {
 			csi2_cam0: endpoint {
